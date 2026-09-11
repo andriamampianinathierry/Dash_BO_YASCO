@@ -832,7 +832,7 @@ function renderKpis(){
     {label:"DMPC moyen", value: formatHM(avgAcrossTypologies(typoRows, "dmpcAvg")), sub:"", accent:"var(--blue)"},
     {label:"DMPC Global moyen", value: formatHM(avgAcrossTypologies(typoRows, "dmpcGlobalAvg")), sub:"", accent:"var(--pink)"},
     {label:"Traités < 24h", value: pctUnder24!==null ? pctUnder24+"%" : "—", sub: under24+" / "+dmpcGlobals.length+" tickets", accent: pctUnder24!==null && pctUnder24>=80 ? "var(--green)" : "var(--amber)"},
-    {label:"Backlog", value: (backlogTaux!==null ? backlogTaux+"%" : "—"), sub: backlogCount+" / "+dmpcGlobals.length+" tickets", accent: backlogTaux!==null && backlogTaux>=30 ? "var(--red)" : "var(--amber)"},
+    {label:"Backlog traités", value: (backlogTaux!==null ? backlogTaux+"%" : "—"), sub: backlogCount+" / "+dmpcGlobals.length+" tickets", accent: backlogTaux!==null && backlogTaux>=30 ? "var(--red)" : "var(--amber)"},
   ];
   document.getElementById("kpiGrid").innerHTML = kpis.map(k=>`
     <div class="kpi" style="--accent:${k.accent}">
