@@ -427,6 +427,28 @@
       </div>
     </div>
 
+    <div class="table-card" style="margin-top:16px;">
+      <div class="table-head">
+        <h3>Résumé par agent</h3>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span class="row-count" id="agentRowCount"></span>
+          <button id="agentDownloadBtn" class="btn-download" type="button">⬇ Télécharger CSV</button>
+        </div>
+      </div>
+      <div class="table-scroll table-scroll-compact">
+        <table>
+          <colgroup>
+            <col class="col-typologie"><col class="col-count"><col class="col-dmt"><col class="col-dmpc"><col class="col-dmpc-global">
+          </colgroup>
+          <thead>
+            <tr id="agentTableHeadRow"></tr>
+          </thead>
+          <tbody id="agentTableBody"></tbody>
+          <tfoot id="agentTableFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -776,6 +798,22 @@ function typoAverages(rows){
     dmtAvg: meanOfMonthlyMeans(rs, "dmtSec")
   }));
 }
+// Regroupe les tickets par agent traiteur — "Traité < 24h" reprend la même définition que le KPI
+// global (durée création -> clôture/escalade, soit DMPC Global, inférieure à 24h).
+function agentAverages(rows){
+  const groups = groupBy(rows.filter(r=>r.agent), r=>r.agent);
+  return [...groups.entries()].map(([agent, rs])=>{
+    const dmpcGlobals = rs.map(r=>r.dmpcGlobalSec).filter(v=>v!==null && v!==undefined);
+    const under24 = dmpcGlobals.filter(v=>v<86400).length;
+    return {
+      agent,
+      count: rs.length,
+      dmtAvg: meanOfMonthlyMeans(rs, "dmtSec"),
+      dmpcAvg: meanOfMonthlyMeans(rs, "dmpcSec"),
+      under24Taux: dmpcGlobals.length ? (100*under24/dmpcGlobals.length) : null
+    };
+  });
+}
 // Regroupe les tickets par la valeur de la colonne "Régule (Non certifié)" (r.statut) —
 // c'est cette colonne qui contient le libellé du type d'incident (ex: "Au-delà de 21h",
 // "Demande escaladée", "Erreur d'assignation", "Problème technique"...).
@@ -802,6 +840,7 @@ function renderAll(){
   renderNoIncidentTypoTable();
   renderIncidentTypeTable();
   renderTypoDetailTable();
+  renderAgentTable();
 }
 
 // Un ticket est considéré "sans incident" quand la colonne Régule vaut "Ticket traité sans incident"
@@ -1407,6 +1446,115 @@ function downloadTypoDetailCsv(){
   URL.revokeObjectURL(url);
 }
 document.getElementById("typoDetailDownloadBtn").addEventListener("click", downloadTypoDetailCsv);
+
+/* ---------------- résumé par agent ---------------- */
+const AGENT_TABLE_COLS = [
+  {key:"agent", label:"Agent"},
+  {key:"count", label:"Nbr traité"},
+  {key:"dmtAvg", label:"DMT"},
+  {key:"dmpcAvg", label:"DMPC"},
+  {key:"under24Taux", label:"Traité < 24h"},
+];
+let agentTableSort = {key:"count", dir:"desc"};
+
+function renderAgentTable(){
+  const head = document.getElementById("agentTableHeadRow");
+  if(!head) return;
+  head.innerHTML = AGENT_TABLE_COLS.map(c=>{
+    const arrow = agentTableSort.key === c.key ? (agentTableSort.dir === "asc" ? "▲" : "▼") : "";
+    return `<th data-key="${c.key}">${c.label} <span class="arrow">${arrow}</span></th>`;
+  }).join("");
+  head.querySelectorAll("th").forEach(th=>{
+    th.addEventListener("click", ()=>{
+      const k = th.dataset.key;
+      if(agentTableSort.key === k) agentTableSort.dir = agentTableSort.dir === "asc" ? "desc" : "asc";
+      else { agentTableSort.key = k; agentTableSort.dir = k === "agent" ? "asc" : "desc"; }
+      renderAgentTable();
+    });
+  });
+
+  let rows = agentAverages(FILTERED);
+
+  rows.sort((a,b)=>{
+    let va = a[agentTableSort.key], vb = b[agentTableSort.key];
+    if(va === null || va === undefined) va = -Infinity;
+    if(vb === null || vb === undefined) vb = -Infinity;
+    if(typeof va === "string") va = stripAccents(va);
+    if(typeof vb === "string") vb = stripAccents(vb);
+    if(va < vb) return agentTableSort.dir === "asc" ? -1 : 1;
+    if(va > vb) return agentTableSort.dir === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  document.getElementById("agentTableBody").innerHTML = rows.map(r=>{
+    const dmtH = r.dmtAvg !== null ? r.dmtAvg/3600 : null;
+    let pillClass = "neutral";
+    if(dmtH !== null){
+      pillClass = dmtH <= 4 ? "ok" : dmtH <= 24 ? "warn" : "bad";
+    }
+    return `<tr>
+      <td>${escapeHtml(r.agent)}</td>
+      <td>${r.count}</td>
+      <td><span class="pill ${pillClass}">${formatHM(r.dmtAvg)}</span></td>
+      <td>${formatHM(r.dmpcAvg)}</td>
+      <td>${r.under24Taux!==null ? Math.round(r.under24Taux)+"%" : "—"}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--ink-soft);">Aucun agent ne correspond aux filtres.</td></tr>`;
+
+  // Ligne de synthèse : total des tickets + moyenne des colonnes de délais / du taux <24h.
+  const foot = document.getElementById("agentTableFoot");
+  let generaleRow = null;
+  if(rows.length){
+    const countSum = rows.reduce((a,r)=>a+r.count, 0);
+    const avgCol = key => {
+      const vals = rows.map(r=>r[key]).filter(v=>v!==null && v!==undefined);
+      return vals.length ? mean(vals) : null;
+    };
+    generaleRow = {
+      agent:"Générale", count:countSum,
+      dmtAvg: avgCol("dmtAvg"), dmpcAvg: avgCol("dmpcAvg"), under24Taux: avgCol("under24Taux")
+    };
+    foot.innerHTML = `
+      <tr class="table-summary-row">
+        <td>Générale</td>
+        <td>${countSum}</td>
+        <td>${formatHM(generaleRow.dmtAvg)}</td>
+        <td>${formatHM(generaleRow.dmpcAvg)}</td>
+        <td>${generaleRow.under24Taux!==null ? Math.round(generaleRow.under24Taux)+"%" : "—"}</td>
+      </tr>`;
+  } else {
+    foot.innerHTML = "";
+  }
+
+  AGENT_TABLE_EXPORT_ROWS = generaleRow ? [...rows, generaleRow] : rows;
+
+  document.getElementById("agentRowCount").textContent = "";
+}
+
+let AGENT_TABLE_EXPORT_ROWS = [];
+function downloadAgentTableCsv(){
+  const sep = ";";
+  const header = AGENT_TABLE_COLS.map(c=>c.label).join(sep);
+  const lines = AGENT_TABLE_EXPORT_ROWS.map(r=>{
+    return AGENT_TABLE_COLS.map(c=>{
+      if(c.key === "agent") return `"${(r.agent||"").replace(/"/g,'""')}"`;
+      if(c.key === "count") return r.count;
+      if(c.key === "under24Taux") return r.under24Taux!==null ? Math.round(r.under24Taux)+"%" : "—";
+      return formatHM(r[c.key]);
+    }).join(sep);
+  });
+  const csv = "\uFEFF" + [header, ...lines].join("\r\n");
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "resume_par_agent.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+document.getElementById("agentDownloadBtn").addEventListener("click", downloadAgentTableCsv);
 
 /* ---------------- table ---------------- */
 /* ---------------- states ---------------- */
